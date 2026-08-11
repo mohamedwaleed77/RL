@@ -11,6 +11,8 @@ import torch.optim as optim
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import profile_manager as pm
@@ -256,7 +258,21 @@ async def websocket_endpoint(websocket: WebSocket):
         print("Client disconnected cleanly")
     except Exception as e:
         print("WebSocket Error:", e)
-        
+
+# --- Serve React Static Files ---
+static_dir = os.path.join(os.path.dirname(__file__), "static_build")
+
+if os.path.exists(static_dir):
+    # Serve static assets (JS, CSS, media)
+    static_assets_dir = os.path.join(static_dir, "static")
+    if os.path.exists(static_assets_dir):
+        app.mount("/static", StaticFiles(directory=static_assets_dir), name="static")
+
+    # Serve index.html at root route
+    @app.get("/")
+    async def serve_index():
+        return FileResponse(os.path.join(static_dir, "index.html"))
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
