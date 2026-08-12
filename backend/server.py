@@ -134,29 +134,49 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal agent, successes, failures
         agent = DQNAgent()
         model_path = os.path.join("profiles", profile_name, "model.pt")
+        
+        # Pull profile metadata (stats + saved epsilon)
+        profiles = pm.get_all_profiles()
+        profile_data = next((p for p in profiles if p.get("name") == profile_name), {})
+        successes = profile_data.get("successes", 0)
+        failures = profile_data.get("failures", 0)
+
         if os.path.exists(model_path):
             try:
-                agent.model.load_state_dict(torch.load(model_path))
-                agent.epsilon = 0.1
+                checkpoint = torch.load(model_path)
+                
+                # Check if file is a full checkpoint dictionary or raw state_dict
+                if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                    agent.model.load_state_dict(checkpoint["model_state_dict"])
+                    agent.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                    agent.epsilon = checkpoint.get("epsilon", profile_data.get("epsilon", 0.05))
+                else:
+                    # Legacy fallback for plain state_dict files
+                    agent.model.load_state_dict(checkpoint)
+                    agent.epsilon = profile_data.get("epsilon", 0.05)
+                    
             except Exception as e:
-                print("Failed to load weights:", e)
+                print("Failed to load weights checkpoint:", e)
+                agent.epsilon = 1.0
         else:
             agent.epsilon = 1.0
-                
-        profiles = pm.get_all_profiles()
-        for p in profiles:
-            if p.get("name") == profile_name:
-                successes = p.get("successes", 0)
-                failures = p.get("failures", 0)
-                break
 
     def save_agent_weights(profile_name):
         if not profile_name:
             return
         model_path = os.path.join("profiles", profile_name, "model.pt")
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        torch.save(agent.model.state_dict(), model_path)
-        pm.save_profile_stats(profile_name, successes, failures)
+        
+        # Save PyTorch checkpoint containing model, optimizer momentum, and epsilon
+        checkpoint = {
+            "model_state_dict": agent.model.state_dict(),
+            "optimizer_state_dict": agent.optimizer.state_dict(),
+            "epsilon": agent.epsilon
+        }
+        torch.save(checkpoint, model_path)
+        
+        # Save JSON profile stats alongside epsilon
+        pm.save_profile_stats(profile_name, successes, failures, epsilon=agent.epsilon)
 
     try:
         while True:
@@ -215,7 +235,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             successes += 1
                         else:
                             failures += 1
-                        pm.save_profile_stats(current_profile, successes, failures)
+                        pm.save_profile_stats(current_profile, successes, failures, epsilon=agent.epsilon)
 
                     state_frame = {
                         "type": "frame",
