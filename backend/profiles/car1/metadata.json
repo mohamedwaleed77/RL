@@ -1,8 +1,0 @@
-{
-  "name": "car1",
-  "episodes_completed": 6,
-  "successes": 0,
-  "failures": 6,
-  "best_reward": 0.0,
-  "total_training_steps": 0
-}
