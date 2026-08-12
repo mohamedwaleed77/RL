@@ -17,7 +17,11 @@ def get_all_profiles():
         if os.path.exists(meta_path):
             try:
                 with open(meta_path, "r") as f:
-                    profiles.append(json.load(f))
+                    data = json.load(f)
+                    # Set default epsilon if reading older metadata without it
+                    if "epsilon" not in data:
+                        data["epsilon"] = 1.0
+                    profiles.append(data)
             except Exception as e:
                 print(f"Error reading metadata for {name}: {e}")
     return profiles
@@ -35,13 +39,14 @@ def create_profile(name: str):
         "successes": 0,
         "failures": 0,
         "best_reward": 0.0,
-        "total_training_steps": 0
+        "total_training_steps": 0,
+        "epsilon": 1.0
     }
     _save_metadata(name, metadata)
     return metadata
 
-def save_profile_stats(name: str, successes: int, failures: int):
-    """Updates success/failure counters in profile metadata."""
+def save_profile_stats(name: str, successes: int, failures: int, epsilon: float = 1.0):
+    """Updates success/failure counters and epsilon in profile metadata."""
     meta_path = os.path.join(PROFILES_DIR, name, "metadata.json")
     metadata = {
         "name": name,
@@ -49,7 +54,8 @@ def save_profile_stats(name: str, successes: int, failures: int):
         "successes": successes,
         "failures": failures,
         "best_reward": 0.0,
-        "total_training_steps": 0
+        "total_training_steps": 0,
+        "epsilon": float(epsilon)
     }
     if os.path.exists(meta_path):
         try:
@@ -58,6 +64,7 @@ def save_profile_stats(name: str, successes: int, failures: int):
                 old_data["successes"] = successes
                 old_data["failures"] = failures
                 old_data["episodes_completed"] = successes + failures
+                old_data["epsilon"] = float(epsilon)
                 metadata = old_data
         except Exception:
             pass
