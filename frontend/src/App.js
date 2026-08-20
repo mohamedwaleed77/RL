@@ -2,6 +2,54 @@ import React, { useEffect, useRef, useState } from 'react';
 
 const DEFAULT_CAR_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50" width="100" height="50"><rect x="5" y="10" width="90" height="30" rx="8" fill="%232563eb" stroke="%23ffffff" stroke-width="2"/><rect x="35" y="14" width="30" height="22" rx="4" fill="%231e293b"/><rect x="38" y="16" width="24" height="18" rx="2" fill="%2338bdf8" opacity="0.8"/><rect x="15" y="4" width="18" height="8" rx="2" fill="%230f172a" stroke="%23cbd5e1" stroke-width="1"/><rect x="67" y="4" width="18" height="8" rx="2" fill="%230f172a" stroke="%23cbd5e1" stroke-width="1"/><rect x="15" y="38" width="18" height="8" rx="2" fill="%230f172a" stroke="%23cbd5e1" stroke-width="1"/><rect x="67" y="38" width="18" height="8" rx="2" fill="%230f172a" stroke="%23cbd5e1" stroke-width="1"/><rect x="91" y="13" width="4" height="6" rx="1" fill="%23fef08a"/><rect x="91" y="31" width="4" height="6" rx="1" fill="%23fef08a"/><rect x="5" y="14" width="3" height="5" rx="1" fill="%23ef4444"/><rect x="5" y="31" width="3" height="5" rx="1" fill="%23ef4444"/></svg>`;
 
+const API_BASE = '/api';
+
+const getWsUrl = () => {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws`;
+};
+
+// Clean Notification Modal
+const ModalDialog = ({ message, onClose }) => {
+  if (!message) return null;
+  return (
+    <div style={modalStyles.overlay}>
+      <div style={modalStyles.card}>
+        <h3 style={modalStyles.titleAlert}>Notification</h3>
+        <p style={modalStyles.body}>{message}</p>
+        <div style={modalStyles.btnGroupRight}>
+          <button onClick={onClose} style={modalStyles.btnPrimary}>
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Clean Confirmation Modal
+const ConfirmDialog = ({ config, onCancel, onConfirm }) => {
+  if (!config) return null;
+  return (
+    <div style={modalStyles.overlay}>
+      <div style={modalStyles.card}>
+        <h3 style={modalStyles.titleConfirm}>Delete Profile</h3>
+        <p style={modalStyles.body}>
+          Are you sure you want to delete profile <strong>"{config.name}"</strong>? This action cannot be undone.
+        </p>
+        <div style={modalStyles.btnGroup}>
+          <button onClick={onCancel} style={modalStyles.btnSecondary}>
+            Cancel
+          </button>
+          <button onClick={onConfirm} style={modalStyles.btnDanger}>
+            Delete Profile
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const canvasRef = useRef(null);
   const socketRef = useRef(null);
@@ -20,6 +68,10 @@ export default function App() {
   const [gameState, setGameState] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+
+  // Modal UI States
+  const [modalMessage, setModalMessage] = useState('');
+  const [confirmConfig, setConfirmConfig] = useState(null);
 
   useEffect(() => {
     activeProfileRef.current = activeProfile;
@@ -52,6 +104,8 @@ export default function App() {
 
       if (latestFrameDataRef.current) {
         drawCanvas(latestFrameDataRef.current, renderPosRef.current);
+      } else {
+        clearCanvas();
       }
 
       animFrameIdRef.current = requestAnimationFrame(renderLoop);
@@ -69,7 +123,8 @@ export default function App() {
     let reconnectTimeout = null;
 
     const connectWebSocket = () => {
-      const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+      const wsUrl = getWsUrl();
+      const ws = new WebSocket(wsUrl);
       socketRef.current = ws;
 
       ws.onopen = () => {
@@ -98,6 +153,8 @@ export default function App() {
             vy: data.car.vy || 0,
             lastTime: performance.now(),
           };
+        } else if (data.type === 'error') {
+          setModalMessage(data.message);
         }
       };
 
@@ -123,7 +180,7 @@ export default function App() {
 
   const fetchProfiles = async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/profiles');
+      const res = await fetch(`${API_BASE}/profiles`);
       const data = await res.json();
       setProfiles(data);
       if (data.length > 0 && !activeProfileRef.current) {
@@ -134,53 +191,86 @@ export default function App() {
     }
   };
 
+  const resetLocalFrameState = () => {
+    latestFrameDataRef.current = null;
+    targetStateRef.current = { x: 50, y: 250, vx: 0, vy: 0, lastTime: performance.now() };
+    renderPosRef.current = { x: 50, y: 250 };
+    setGameState(null);
+  };
+
   const handleCreateProfile = async () => {
-    if (!newProfileName.trim()) return;
+    const name = newProfileName.trim();
+    if (!name) return;
+
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/profiles', {
+      const res = await fetch(`${API_BASE}/profiles`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newProfileName.trim() }),
+        body: JSON.stringify({ name }),
       });
 
       if (res.ok) {
-        const createdName = newProfileName.trim();
         setNewProfileName('');
-        setIsRunning(false); // Reset running state for new profile
+        setIsRunning(false);
+        resetLocalFrameState();
         await fetchProfiles();
-        selectProfile(createdName);
+        selectProfile(name);
       } else {
-        alert('Profile already exists!');
+        const errData = await res.json().catch(() => ({}));
+        setModalMessage(errData.detail || `Request failed with status ${res.status}`);
       }
     } catch (err) {
       console.error('Error creating profile:', err);
+      setModalMessage('Network error: Failed to connect to backend.');
     }
   };
 
-  const handleDeleteProfile = async (name) => {
-    if (!window.confirm(`Delete profile "${name}"?`)) return;
+  // Trigger pause immediately when opening confirmation prompt
+  const requestDeleteProfile = (name) => {
+    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ command: 'stop_simulation' }));
+    }
+    setIsRunning(false);
+
+    setConfirmConfig({ name });
+  };
+
+  // Execute deletion after user confirms
+  const executeDeleteProfile = async (name) => {
+    setConfirmConfig(null);
 
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/profiles/${name}`, {
+      const res = await fetch(`${API_BASE}/profiles/${name}`, {
         method: 'DELETE',
       });
 
       if (res.ok) {
-        if (activeProfile === name) {
+        if (activeProfileRef.current === name) {
           setActiveProfile('');
-          setIsRunning(false);
-          setGameState(null);
+          activeProfileRef.current = '';
+          resetLocalFrameState();
+
+          if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({ command: 'select_profile', name: '' }));
+          }
         }
         await fetchProfiles();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setModalMessage(errData.detail || 'Failed to delete profile.');
       }
     } catch (err) {
       console.error('Error deleting profile:', err);
+      setModalMessage('Network error: Failed to delete profile.');
     }
   };
 
   const selectProfile = (name) => {
     setActiveProfile(name);
-    setIsRunning(false); // Pause simulation when switching profiles
+    activeProfileRef.current = name;
+    setIsRunning(false);
+    resetLocalFrameState();
+
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({ command: 'stop_simulation' }));
       socketRef.current.send(JSON.stringify({ command: 'select_profile', name }));
@@ -189,7 +279,7 @@ export default function App() {
 
   const toggleSimulation = () => {
     if (!activeProfile) {
-      alert('Please select or create a profile first!');
+      setModalMessage('Please select or create a profile first.');
       return;
     }
 
@@ -202,6 +292,23 @@ export default function App() {
         setIsRunning(true);
       }
     }
+  };
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const roadTop = 50;
+    const roadHeight = 400;
+
+    ctx.fillStyle = '#064e3b';
+    ctx.fillRect(0, 0, canvas.width, roadTop);
+    ctx.fillRect(0, roadTop + roadHeight, canvas.width, roadTop);
+
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(0, roadTop, canvas.width, roadHeight);
   };
 
   const drawCanvas = (state, carPos) => {
@@ -256,7 +363,7 @@ export default function App() {
 
     // Square Obstacles
     const size = 40;
-    state.obstacles.forEach((obs, idx) => {
+    (state.obstacles || []).forEach((obs, idx) => {
       const halfSize = size / 2;
       const isGate = idx >= 5;
 
@@ -266,8 +373,7 @@ export default function App() {
       ctx.lineWidth = 3;
       ctx.strokeStyle = '#ffffff';
       ctx.strokeRect(obs.x - halfSize, obs.y - halfSize, size, size);
-
-     });
+    });
 
     // Car Render
     ctx.save();
@@ -285,47 +391,59 @@ export default function App() {
 
   const getHudStatus = () => {
     if (!gameState?.done) {
-      if (isRunning) return { text: 'Training AI...', color: '#10b981' };
+      if (isRunning) return { text: 'Training Active', color: '#10b981' };
       return { text: 'Paused', color: '#94a3b8' };
     }
 
     const reason = gameState?.info?.reason;
     if (reason === 'success') {
-      return { text: '🏁 Goal Reached!', color: '#10b981' };
+      return { text: 'Goal Reached', color: '#10b981' };
     }
-    return { text: `💥 Crash: ${reason || 'Collision'}`, color: '#ef4444' };
+    return { text: `Collision: ${reason || 'Failed'}`, color: '#ef4444' };
   };
 
   const hudStatus = getHudStatus();
 
+  // Profile data fallback
+  const activeProfileData = profiles.find((p) => p.name === activeProfile);
+  const currentPass = gameState?.successes ?? activeProfileData?.successes ?? 0;
+  const currentFail = gameState?.failures ?? activeProfileData?.failures ?? 0;
+
   return (
     <div style={styles.appWrapper}>
+      <ModalDialog message={modalMessage} onClose={() => setModalMessage('')} />
+      <ConfirmDialog
+        config={confirmConfig}
+        onCancel={() => setConfirmConfig(null)}
+        onConfirm={() => executeDeleteProfile(confirmConfig.name)}
+      />
+
       <header style={styles.header}>
         <div style={styles.brand}>
-          <span style={styles.logoIcon}>🏎️</span>
-          <h1 style={styles.brandTitle}>RL Autonomous Driver Studio</h1>
+          <div style={styles.brandBadge}>RL</div>
+          <h1 style={styles.brandTitle}>Autonomous Driver Studio</h1>
         </div>
         <div style={styles.statusIndicator}>
           <span style={styles.statusDot(wsConnected)} />
           <span style={styles.statusText}>
-            Engine WS: {wsConnected ? 'Connected (Ready)' : 'Reconnecting...'}
+            {wsConnected ? 'WebSocket Connected' : 'Reconnecting...'}
           </span>
         </div>
       </header>
 
       <div style={styles.mainContent}>
         <div style={styles.viewportColumn}>
-          {/* UPDATED HUD BAR: 3 Columns, Epsilon Hidden */}
           <div style={styles.hudBar}>
             <div style={styles.hudMetric}>
               <span style={styles.hudLabel}>Active Agent</span>
               <span style={styles.hudValue}>{activeProfile || 'None'}</span>
             </div>
             <div style={styles.hudMetric}>
-              <span style={styles.hudLabel}>Success / Fail Ratio</span>
+              <span style={styles.hudLabel}>Pass / Fail Ratio</span>
               <span style={styles.hudValue}>
-                <span style={{ color: '#10b981' }}>{gameState?.successes || 0}</span> /{' '}
-                <span style={{ color: '#ef4444' }}>{gameState?.failures || 0}</span>
+                <span style={{ color: '#10b981' }}>{currentPass}</span>
+                <span style={{ color: '#64748b', margin: '0 6px' }}>/</span>
+                <span style={{ color: '#f87171' }}>{currentFail}</span>
               </span>
             </div>
             <div style={styles.hudMetric}>
@@ -343,7 +461,7 @@ export default function App() {
 
         <aside style={styles.sidebar}>
           <div style={styles.sidebarCard}>
-            <h2 style={styles.cardTitle}>Simulation Engine</h2>
+            <h2 style={styles.cardTitle}>Engine Control</h2>
             <button
               onClick={toggleSimulation}
               disabled={!activeProfile || !wsConnected}
@@ -353,7 +471,7 @@ export default function App() {
                 cursor: activeProfile && wsConnected ? 'pointer' : 'not-allowed',
               }}
             >
-              {isRunning ? '⏸ Pause Training' : '▶ Start High-Speed Training'}
+              {isRunning ? 'Pause Simulation' : 'Start Simulation'}
             </button>
           </div>
 
@@ -364,11 +482,11 @@ export default function App() {
                 type="text"
                 value={newProfileName}
                 onChange={(e) => setNewProfileName(e.target.value)}
-                placeholder="Profile Name (e.g. car1)"
+                placeholder="Profile Name"
                 style={styles.input}
               />
               <button onClick={handleCreateProfile} style={styles.btnPrimary}>
-                + Add
+                Create
               </button>
             </div>
           </div>
@@ -388,11 +506,14 @@ export default function App() {
                       style={{
                         ...styles.profileCard,
                         borderColor: isActive ? '#3b82f6' : '#334155',
-                        backgroundColor: isActive ? '#1e3a8a' : '#0f172a',
+                        backgroundColor: isActive ? '#1e293b' : '#0f172a',
                       }}
                     >
                       <div>
-                        <div style={styles.profileName}>{p.name}</div>
+                        <div style={styles.profileName}>
+                          {p.name}
+                          {isActive && <span style={styles.activeBadge}>Active</span>}
+                        </div>
                         <div style={styles.profileSubtext}>
                           Pass: {p.successes || 0} | Fail: {p.failures || 0}
                         </div>
@@ -400,9 +521,10 @@ export default function App() {
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleDeleteProfile(p.name);
+                          requestDeleteProfile(p.name);
                         }}
-                        style={styles.btnDanger}
+                        style={styles.btnDangerIcon}
+                        title="Delete Profile"
                       >
                         Delete
                       </button>
@@ -418,51 +540,119 @@ export default function App() {
   );
 }
 
+const modalStyles = {
+  overlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.8)',
+    backdropFilter: 'blur(4px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+  },
+  card: {
+    backgroundColor: '#1e293b',
+    border: '1px solid #334155',
+    borderRadius: '12px',
+    padding: '24px',
+    maxWidth: '420px',
+    width: '90%',
+    boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)',
+  },
+  titleConfirm: { margin: '0 0 10px 0', fontSize: '18px', fontWeight: '600', color: '#f8fafc' },
+  titleAlert: { margin: '0 0 10px 0', fontSize: '18px', fontWeight: '600', color: '#f87171' },
+  body: { margin: '0 0 24px 0', color: '#94a3b8', fontSize: '14px', lineHeight: '1.5' },
+  btnGroup: { display: 'flex', justifyContent: 'flex-end', gap: '12px' },
+  btnGroupRight: { display: 'flex', justifyContent: 'flex-end' },
+  btnPrimary: {
+    backgroundColor: '#2563eb',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '8px 16px',
+    fontWeight: '500',
+    fontSize: '14px',
+    cursor: 'pointer',
+  },
+  btnSecondary: {
+    backgroundColor: '#334155',
+    color: '#f8fafc',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '8px 16px',
+    fontWeight: '500',
+    fontSize: '14px',
+    cursor: 'pointer',
+  },
+  btnDanger: {
+    backgroundColor: '#dc2626',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '8px 16px',
+    fontWeight: '500',
+    fontSize: '14px',
+    cursor: 'pointer',
+  },
+};
+
 const styles = {
   appWrapper: {
     display: 'flex',
     flexDirection: 'column',
     height: '100vh',
     width: '100vw',
-    backgroundColor: '#0f172a',
-    fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+    backgroundColor: '#0b0f19',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
     color: '#f8fafc',
     boxSizing: 'border-box',
     overflow: 'hidden',
   },
   header: {
-    height: '64px',
-    backgroundColor: '#1e293b',
+    height: '60px',
+    backgroundColor: '#0f172a',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '0 32px',
-    borderBottom: '1px solid #334155',
+    padding: '0 28px',
+    borderBottom: '1px solid #1e293b',
   },
   brand: { display: 'flex', alignItems: 'center', gap: '12px' },
-  logoIcon: { fontSize: '24px' },
-  brandTitle: { fontSize: '20px', fontWeight: '700', margin: 0 },
+  brandBadge: {
+    backgroundColor: '#2563eb',
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: '12px',
+    padding: '4px 8px',
+    borderRadius: '6px',
+    letterSpacing: '0.5px',
+  },
+  brandTitle: { fontSize: '18px', fontWeight: '600', margin: 0, color: '#f8fafc' },
   statusIndicator: {
     display: 'flex',
     alignItems: 'center',
-    gap: '10px',
-    backgroundColor: '#0f172a',
-    padding: '6px 14px',
-    borderRadius: '20px',
+    gap: '8px',
+    backgroundColor: '#1e293b',
+    padding: '5px 12px',
+    borderRadius: '6px',
     border: '1px solid #334155',
   },
   statusDot: (connected) => ({
-    width: '10px',
-    height: '10px',
+    width: '8px',
+    height: '8px',
     borderRadius: '50%',
-    backgroundColor: connected ? '#10b981' : '#ef4444',
+    backgroundColor: connected ? '#10b981' : '#f87171',
   }),
-  statusText: { fontSize: '13px', fontWeight: '500', color: '#cbd5e1' },
+  statusText: { fontSize: '13px', fontWeight: '500', color: '#94a3b8' },
   mainContent: {
     display: 'flex',
     flex: 1,
-    gap: '24px',
-    padding: '24px 32px',
+    gap: '20px',
+    padding: '20px 28px',
     boxSizing: 'border-box',
     overflow: 'hidden',
   },
@@ -474,87 +664,100 @@ const styles = {
   },
   hudBar: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)', // Updated from 4 to 3 columns
+    gridTemplateColumns: 'repeat(3, 1fr)',
     gap: '16px',
-    backgroundColor: '#1e293b',
-    padding: '16px 24px',
-    borderRadius: '12px',
-    border: '1px solid #334155',
+    backgroundColor: '#0f172a',
+    padding: '16px 20px',
+    borderRadius: '10px',
+    border: '1px solid #1e293b',
   },
   hudMetric: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  hudLabel: { fontSize: '12px', color: '#94a3b8', textTransform: 'uppercase', fontWeight: '600' },
-  hudValue: { fontSize: '20px', fontWeight: '700', color: '#f8fafc' },
+  hudLabel: { fontSize: '11px', color: '#64748b', textTransform: 'uppercase', fontWeight: '600', letterSpacing: '0.5px' },
+  hudValue: { fontSize: '18px', fontWeight: '600', color: '#f8fafc' },
   canvasContainer: {
     flex: 1,
-    backgroundColor: '#1e293b',
-    borderRadius: '12px',
-    border: '1px solid #334155',
+    backgroundColor: '#0f172a',
+    borderRadius: '10px',
+    border: '1px solid #1e293b',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     padding: '16px',
   },
-  canvas: { width: '100%', maxHeight: '100%', borderRadius: '8px' },
-  sidebar: { width: '360px', display: 'flex', flexDirection: 'column', gap: '16px' },
+  canvas: { width: '100%', maxHeight: '100%', borderRadius: '6px' },
+  sidebar: { width: '340px', display: 'flex', flexDirection: 'column', gap: '16px' },
   sidebarCard: {
-    backgroundColor: '#1e293b',
-    borderRadius: '12px',
-    padding: '20px',
-    border: '1px solid #334155',
+    backgroundColor: '#0f172a',
+    borderRadius: '10px',
+    padding: '18px',
+    border: '1px solid #1e293b',
   },
-  cardTitle: { fontSize: '16px', fontWeight: '600', margin: '0 0 14px 0', color: '#f1f5f9' },
-  inputGroup: { display: 'flex', gap: '10px' },
+  cardTitle: { fontSize: '15px', fontWeight: '600', margin: '0 0 14px 0', color: '#f8fafc' },
+  inputGroup: { display: 'flex', gap: '8px' },
   input: {
     flex: 1,
-    padding: '10px 14px',
-    backgroundColor: '#0f172a',
+    padding: '9px 12px',
+    backgroundColor: '#1e293b',
     border: '1px solid #334155',
     borderRadius: '6px',
     color: '#ffffff',
-    fontSize: '14px',
+    fontSize: '13px',
+    outline: 'none',
   },
   btnPrimary: {
-    padding: '10px 16px',
+    padding: '9px 14px',
     backgroundColor: '#2563eb',
     color: '#ffffff',
     border: 'none',
     borderRadius: '6px',
-    fontWeight: '600',
+    fontWeight: '500',
+    fontSize: '13px',
     cursor: 'pointer',
   },
   btnToggle: (running) => ({
     width: '100%',
-    padding: '14px',
-    backgroundColor: running ? '#dc2626' : '#059669',
+    padding: '12px',
+    backgroundColor: running ? '#dc2626' : '#2563eb',
     color: '#ffffff',
     border: 'none',
-    borderRadius: '8px',
-    fontSize: '16px',
-    fontWeight: '700',
-    transition: 'all 0.2s ease',
-  }),
-  btnDanger: {
-    padding: '6px 12px',
-    backgroundColor: '#dc2626',
-    color: '#ffffff',
-    border: 'none',
-    borderRadius: '4px',
-    fontSize: '12px',
+    borderRadius: '6px',
+    fontSize: '14px',
     fontWeight: '600',
     cursor: 'pointer',
+    transition: 'background-color 0.15s ease',
+  }),
+  btnDangerIcon: {
+    padding: '5px 10px',
+    backgroundColor: 'transparent',
+    color: '#f87171',
+    border: '1px solid #7f1d1d',
+    borderRadius: '4px',
+    fontSize: '12px',
+    fontWeight: '500',
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
   },
-  emptyText: { color: '#64748b', fontSize: '14px' },
-  profileList: { display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto', maxHeight: '360px' },
+  emptyText: { color: '#64748b', fontSize: '13px', margin: 0 },
+  profileList: { display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', maxHeight: '360px' },
   profileCard: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '12px 16px',
-    borderRadius: '8px',
-    border: '2px solid',
+    padding: '12px 14px',
+    borderRadius: '6px',
+    border: '1px solid',
     cursor: 'pointer',
     color: '#f8fafc',
+    transition: 'all 0.15s ease',
   },
-  profileName: { fontWeight: '700', fontSize: '15px' },
-  profileSubtext: { fontSize: '12px', color: '#94a3b8', marginTop: '2px' },
+  profileName: { fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' },
+  activeBadge: {
+    backgroundColor: '#1e3a8a',
+    color: '#60a5fa',
+    fontSize: '10px',
+    padding: '2px 6px',
+    borderRadius: '4px',
+    fontWeight: '500',
+  },
+  profileSubtext: { fontSize: '12px', color: '#64748b', marginTop: '4px' },
 };

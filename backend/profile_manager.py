@@ -155,7 +155,11 @@ def delete_profile(name: str):
     return False
 
 
-
+def profile_exists(name: str) -> bool:
+    """Checks if a profile directory exists."""
+    profile_path = os.path.join(PROFILES_DIR, name)
+    return os.path.exists(profile_path)
+    
 def _save_metadata(name: str, metadata: dict):
 
     meta_path = os.path.join(PROFILES_DIR, name, "metadata.json")
